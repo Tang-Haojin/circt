@@ -19,6 +19,7 @@
 
 #include "../PassDetail.h"
 #include "ExportVerilogInternals.h"
+#include "circt/Analysis/DebugAnalysis.h"
 #include "circt/Conversion/ExportVerilog.h"
 #include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/Debug/DebugDialect.h"
@@ -793,7 +794,8 @@ static void applyWireLowerings(Block &block,
 /// For each module we emit, do a prepass over the structure, pre-lowering and
 /// otherwise rewriting operations we don't want to emit.
 static LogicalResult legalizeHWModule(Block &block,
-                                      const LoweringOptions &options) {
+                                      const LoweringOptions &options,
+                                      DebugAnalysis &debugAnalysis) {
 
   // First step, check any nested blocks that exist in this region.  This walk
   // can pull things out to our level of the hierarchy.
@@ -801,7 +803,7 @@ static LogicalResult legalizeHWModule(Block &block,
     // If the operations has regions, prepare each of the region bodies.
     for (auto &region : op.getRegions()) {
       if (!region.empty())
-        if (failed(legalizeHWModule(region.front(), options)))
+        if (failed(legalizeHWModule(region.front(), options, debugAnalysis)))
           return failure();
     }
   }
@@ -1207,12 +1209,13 @@ static LogicalResult legalizeHWModule(Block &block,
 
 // NOLINTNEXTLINE(misc-no-recursion)
 LogicalResult ExportVerilog::prepareHWModule(hw::HWModuleOp module,
-                                             const LoweringOptions &options) {
+                                             const LoweringOptions &options,
+                                             DebugAnalysis &debugAnalysis) {
   // Zero-valued logic pruning.
   pruneZeroValuedLogic(module);
 
   // Legalization.
-  if (failed(legalizeHWModule(*module.getBodyBlock(), options)))
+  if (failed(legalizeHWModule(*module.getBodyBlock(), options, debugAnalysis)))
     return failure();
 
   EmittedExpressionStateManager expressionStateManager(options);
@@ -1227,8 +1230,9 @@ struct PrepareForEmissionPass
     : public PrepareForEmissionBase<PrepareForEmissionPass> {
   void runOnOperation() override {
     HWModuleOp module = getOperation();
+    auto &debugAnalysis = getAnalysis<DebugAnalysis>();
     LoweringOptions options(cast<mlir::ModuleOp>(module->getParentOp()));
-    if (failed(prepareHWModule(module, options)))
+    if (failed(prepareHWModule(module, options, debugAnalysis)))
       signalPassFailure();
   }
 };
