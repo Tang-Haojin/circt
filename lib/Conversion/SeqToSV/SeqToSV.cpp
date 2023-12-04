@@ -392,8 +392,7 @@ void SeqToSVPass::runOnOperation() {
 
   // Lower memories and registers in modules in parallel.
   bool needsRegRandomization = false;
-  for (auto module : modules) {
-    llvm::errs() << "Start " << module.getModuleNameAttr() << "\n";
+  mlir::parallelForEach(&getContext(), modules, [&](HWModuleOp module) {
     SeqToSVTypeConverter typeConverter;
     FirRegLowering regLowering(typeConverter, module, disableRegRandomization,
                                emitSeparateAlwaysBlocks);
@@ -404,8 +403,7 @@ void SeqToSVPass::runOnOperation() {
 
     if (auto *it = memsByModule.find(module); it != memsByModule.end())
       memLowering.lowerMemoriesInModule(module, it->second);
-    llvm::errs() << "End " << module.getModuleNameAttr() << "\n";
-  };
+  });
 
   // Mark all ops which can have clock types as illegal.
   SeqToSVTypeConverter typeConverter;
