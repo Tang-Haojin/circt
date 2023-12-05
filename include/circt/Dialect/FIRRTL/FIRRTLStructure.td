@@ -409,6 +409,9 @@ def LayerOp : FIRRTLOp<
   let assemblyFormat = [{
     $sym_name $convention attr-dict-with-keyword $body
   }];
+  let extraClassDeclaration = [{
+    std::optional<int> compare(const LayerOp &other);
+  }];
 }
 
 def OptionOp : FIRRTLOp<"option", [

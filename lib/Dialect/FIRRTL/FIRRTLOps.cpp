@@ -5735,8 +5735,40 @@ LogicalResult RWProbeOp::verifyInnerRefs(hw::InnerRefNamespace &ns) {
 }
 
 //===----------------------------------------------------------------------===//
-// Layer Block Operations
+// Layer Operations
 //===----------------------------------------------------------------------===//
+
+/// Three-way compare this layer to another.
+///
+/// Layers are partially orderd.  An `std::optional<int>` is used to encode the
+/// fact that two layers may not be comparable.  A child layer is said to be
+/// "greater than" it's parent for the reason that a child layer is "stacked" on
+/// its parent is then, in a sense, "higher" than the parent.
+///
+/// All possible return values are enumerated below:
+///
+///   - return 1 if the layer is higher (a child) of the other layer
+///   - return 0 if the layer is the same as the other layer
+///   - return -1 if the layer is lower (a parent) of the other layer
+///   - return {} if the layer is neither higher nor lower (neither a parent or
+///     a child) of the other layer
+std::optional<int> LayerOp::compare(const LayerOp &other) {
+
+  if (&other == this)
+    return 0;
+
+  Operation *parent = (*this)->getParentOp();
+  while (!isa<CircuitOp>(parent))
+    if (parent == other)
+      return 1;
+
+  parent = other->getParentOp();
+  while (!isa<CircuitOp>(parent))
+    if (parent == (*this))
+      return -1;
+
+  return {};
+}
 
 LogicalResult LayerBlockOp::verify() {
   auto layerName = getLayerName();
