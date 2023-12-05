@@ -12,10 +12,12 @@
 
 #include "PassDetails.h"
 
+#include "circt/Dialect/FIRRTL/FIRRTLConnectionGraph.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Transforms/ControlFlowSinkUtils.h"
+#include "llvm/ADT/SCCIterator.h"
 
 #define DEBUG_TYPE "firrtl-layer-sink"
 
@@ -34,19 +36,34 @@ void LayerSink::runOnOperation() {
       llvm::dbgs() << "==----- Running LayerSink "
                       "---------------------------------------------------===\n"
                    << "Module: '" << getOperation().getName() << "'\n";);
-  auto &domInfo = getAnalysis<mlir::DominanceInfo>();
-  getOperation()->walk([&](LayerBlockOp layerBlock) {
-    SmallVector<Region *> regionsToSink({&layerBlock.getRegion()});
-    numSunk = controlFlowSink(
-        regionsToSink, domInfo,
-        [](Operation *op, Region *) { return !hasDontTouch(op); },
-        [](Operation *op, Region *region) {
-          // Move the operation to the beginning of the region's entry block.
-          // This guarantees the preservation of SSA dominance of all of the
-          // operation's uses are in the region.
-          op->moveBefore(&region->front(), region->front().begin());
-        });
-  });
+  // auto &domInfo = getAnalysis<mlir::DominanceInfo>();
+  // getOperation()->walk([&](LayerBlockOp layerBlock) {
+  //   SmallVector<Region *> regionsToSink({&layerBlock.getRegion()});
+  //   numSunk = controlFlowSink(
+  //       regionsToSink, domInfo,
+  //       [](Operation *op, Region *) { return !hasDontTouch(op); },
+  //       [](Operation *op, Region *region) {
+  //         // Move the operation to the beginning of the region's entry block.
+  //         // This guarantees the preservation of SSA dominance of all of the
+  //         // operation's uses are in the region.
+  //         op->moveBefore(&region->front(), region->front().begin());
+  //       });
+  // });
+
+  int sccNumber = 0;
+
+  FIRRTLOperation *moduleOp = getOperation();
+  for (llvm::scc_iterator<detail::FIRRTLOperation *>
+           i = llvm::scc_begin(moduleOp),
+           e = llvm::scc_end(moduleOp);
+       i != e; ++i) {
+    LLVM_DEBUG({
+      llvm::dbgs() << "SCC: " << sccNumber++ << "\n";
+      for (auto *op : *i) {
+        llvm::errs() << "  - " << *op << "\n";
+      }
+    });
+  }
 }
 
 std::unique_ptr<mlir::Pass> circt::firrtl::createLayerSinkPass() {
