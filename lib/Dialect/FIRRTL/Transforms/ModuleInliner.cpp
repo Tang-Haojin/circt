@@ -17,7 +17,6 @@
 #include "circt/Dialect/FIRRTL/FIRRTLOps.h"
 #include "circt/Dialect/FIRRTL/FIRRTLTypes.h"
 #include "circt/Dialect/FIRRTL/FIRRTLUtils.h"
-#include "circt/Dialect/FIRRTL/FIRRTLVisitors.h"
 #include "circt/Dialect/FIRRTL/Namespace.h"
 #include "circt/Dialect/FIRRTL/Passes.h"
 #include "circt/Dialect/HW/HWAttributes.h"
@@ -27,9 +26,6 @@
 #include "mlir/IR/IRMapping.h"
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/SetOperations.h"
-#include "llvm/ADT/SetVector.h"
-#include "llvm/ADT/SmallPtrSet.h"
-#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/FormatVariadic.h"
 
@@ -100,6 +96,12 @@ class MutableNLA {
   /// module.
   DenseMap<Attribute, StringAttr> renames;
 
+  /// Indicates if the _original_ NLA is referenced by any annotation. This is
+  /// required to avoid inconsistent updates to the NLA path. Since the inliner
+  /// algorithm relies on "circt.nonlocal" annotation references to update the
+  /// path, absence of any reference results in incorrect paths.
+  bool isUsed;
+
   /// Lookup a reference and apply any renames to it.  This requires both the
   /// module where the NEW reference lives (to lookup the rename) and the
   /// original ID of the reference (to fallback to if the reference was not
@@ -114,7 +116,7 @@ public:
   MutableNLA(hw::HierPathOp nla, CircuitNamespace *circuitNamespace)
       : nla(nla), circuitNamespace(circuitNamespace),
         inlinedSymbols(BitVector(nla.getNamepath().size(), true)),
-        size(nla.getNamepath().size()) {
+        size(nla.getNamepath().size()), isUsed(false) {
     for (size_t i = 0, e = size; i != e; ++i)
       symIdx.insert({nla.modPart(i), i});
   }
@@ -139,8 +141,23 @@ public:
   /// Set the state of the mutable NLA to indicate the only target is a module.
   void markModuleOnly() { moduleOnly = true; }
 
+  /// Mark the nla as used, if it is referenced by an annotation.
+  void markUsed() { isUsed = true; }
+
   /// Return the original NLA that this was pointing at.
   hw::HierPathOp getNLA() { return nla; }
+
+  /// This is called after applyUpdates and after all the annotations are
+  /// updated. As a final step, when it is known that this nla is not referenced
+  /// by any annotation, erase it. This is required for correctness, since the
+  /// inliner algorithm cannot update an NLA correctly if it is not referenced
+  /// by any annotation and can leave it in an inconsistent state.
+  void cleanup() {
+    if (!nla || isUsed)
+      return;
+    nla->erase();
+    nla = nullptr;
+  }
 
   /// Writeback updates accumulated in this MutableNLA to the IR.  This method
   /// should only ever be called once and, if a writeback occurrs, the
@@ -152,6 +169,7 @@ public:
     // Delete an NLA which is either dead or has been made local.
     if (isLocal() || isDead()) {
       nla.erase();
+      nla = nullptr;
       return nullptr;
     }
 
@@ -217,6 +235,7 @@ public:
       last = writeBack(root.getModule(), root.getName());
 
     nla.erase();
+    nla = last;
     return last;
   }
 
@@ -1341,10 +1360,9 @@ void Inliner::run() {
   // Writeback all NLAs to MLIR.
   for (auto &nla : nlaMap)
     nla.getSecond().applyUpdates();
-
   // Garbage collect any annotations which are now dead.  Duplicate annotations
   // which are now split.
-  for (auto fmodule : circuit.getBodyBlock()->getOps<FModuleOp>()) {
+  for (auto fmodule : circuit.getBodyBlock()->getOps<FModuleLike>()) {
     SmallVector<Attribute> newAnnotations;
     auto processNLAs = [&](Annotation anno) -> bool {
       if (auto sym = anno.getMember<FlatSymbolRefAttr>("circt.nonlocal")) {
@@ -1354,12 +1372,13 @@ void Inliner::run() {
         if (!nlaMap.count(sym.getAttr()))
           return false;
 
-        auto mnla = nlaMap[sym.getAttr()];
+        auto &mnla = nlaMap[sym.getAttr()];
 
         // Garbage collect dead NLA references.  This cleans up NLAs that go
         // through modules which we never visited.
         if (mnla.isDead())
           return true;
+        mnla.markUsed();
 
         // Do nothing if there are no additional NLAs to add or if we're
         // dealing with a root module.  Root modules have already been updated
@@ -1412,6 +1431,9 @@ void Inliner::run() {
     }
     fmodule->setAttr("portAnnotations",
                      ArrayAttr::get(context, newPortAnnotations));
+  }
+  for (auto mnla : nlaMap) {
+    mnla.getSecond().cleanup();
   }
 }
 
