@@ -1250,6 +1250,19 @@ private:
           newAnnotations.push_back(anno);
         continue;
       }
+      // BlackBoxInlineAnno and BlackBoxPathAnno are also sticky annotations
+      // that should not be made non-local, as they are specific to the
+      // external module.
+      if (anno.isClass(blackBoxInlineAnnoClass) ||
+          anno.isClass(blackBoxPathAnnoClass)) {
+        // Remove the nonlocal field of the annotation if it has one, since this
+        // is a sticky annotation.
+        anno.removeMember("circt.nonlocal");
+        // Unlike dontTouch, we don't need to deduplicate blackbox annotations
+        // since they should be identical for deduplicated modules.
+        newAnnotations.push_back(anno);
+        continue;
+      }
       // If the annotation is already non-local, we add it as is.  It is already
       // added to the target map.
       if (auto nla = anno.getMember<FlatSymbolRefAttr>("circt.nonlocal")) {
